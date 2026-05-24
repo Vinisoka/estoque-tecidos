@@ -8,14 +8,9 @@ class GSheetsConnection(BaseConnection[gspread.client.Client]):
         if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             sec = st.secrets["connections"]["gsheets"]
             
-            # Limpa qualquer formatação quebrada que a nuvem possa causar na chave
+            # Recupera a chave e força a substituição limpa dos caracteres de escape
             pkey = sec.get("private_key", "")
-            if "\\n" in pkey:
-                pkey = pkey.replace("\\n", "\n")
-            
-            # Garante que os cabeçalhos da chave existam e estejam limpos
-            if "-----BEGIN PRIVATE KEY-----" not in pkey:
-                pkey = "-----BEGIN PRIVATE KEY-----\n" + pkey.strip() + "\n-----END PRIVATE KEY-----"
+            pkey = pkey.replace("\\n", "\n")
             
             creds = {
                 "type": "service_account",
