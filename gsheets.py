@@ -5,17 +5,14 @@ import pandas as pd
 
 class GSheetsConnection(BaseConnection[gspread.client.Client]):
     def _connect(self, **kwargs) -> gspread.client.Client:
-        # Se você configurou como [gconnections] ou usar as chaves diretas
-        if "gconnections" in st.secrets:
-            return gspread.service_account_from_dict(st.secrets["gconnections"])
-        elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-            # Tenta pegar as credenciais de dentro da estrutura padrão do Streamlit
+        # 1. Tenta ler o formato padrão de conexões do Streamlit (Mais seguro na nuvem)
+        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
             sec = st.secrets["connections"]["gsheets"]
             creds = {
                 "type": sec.get("type", "service_account"),
                 "project_id": sec.get("project_id"),
                 "private_key_id": sec.get("private_key_id"),
-                "private_key": sec.get("private_key"),
+                "private_key": sec.get("private_key", "").replace("\\n", "\n"),
                 "client_email": sec.get("client_email"),
                 "client_id": sec.get("client_id"),
                 "auth_uri": sec.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
@@ -25,11 +22,20 @@ class GSheetsConnection(BaseConnection[gspread.client.Client]):
             }
             return gspread.service_account_from_dict(creds)
         
-        # Caso não ache os blocos acima, tenta carregar o dicionário completo do secrets
+        # 2. Se houver um bloco isolado [gconnections]
+        if "gconnections" in st.secrets:
+            return gspread.service_account_from_dict(st.secrets["gconnections"])
+            
+        # 3. Fallback para ambiente local
         return gspread.service_account_from_dict(dict(st.secrets))
 
     def read(self, worksheet: str, ttl: int = 0, **kwargs) -> pd.DataFrame:
-        url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        # Busca a URL da planilha de forma flexível
+        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+            url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        else:
+            url = st.secrets.get("spreadsheet")
+            
         client = self._connect()
         sh = client.open_by_url(url)
         wks = sh.worksheet(worksheet)
@@ -37,7 +43,11 @@ class GSheetsConnection(BaseConnection[gspread.client.Client]):
         return pd.DataFrame(data)
 
     def update(self, worksheet: str, data: pd.DataFrame, **kwargs):
-        url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+            url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+        else:
+            url = st.secrets.get("spreadsheet")
+            
         client = self._connect()
         sh = client.open_by_url(url)
         wks = sh.worksheet(worksheet)
