@@ -8,7 +8,7 @@ st.set_page_config(
     page_title="Controle de Estoque - Tecidos",
     page_icon="📦",
     layout="wide",
-    initial_sidebar_state="collapsed" # Melhora o visual no celular, deixando o menu escondido por padrão
+    initial_sidebar_state="collapsed" # Esconde o menu lateral por padrão para poupar espaço no celular
 )
 
 # 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
@@ -45,7 +45,8 @@ def check_password():
                 st.text_input("Senha", type="password", key="password")
                 st.form_submit_button("Entrar", on_click=password_entered)
             
-            if "password_correct" in st.session_state Register and not st.session_state["password_correct"]:
+            # CORRIGIDO: Linha limpa sem a palavra intrusa
+            if "password_correct" in st.session_state and not st.session_state["password_correct"]:
                 st.error("❌ Usuário ou senha incorretos.")
         return False
     return True
@@ -82,7 +83,7 @@ df_estoque, df_historico = carregar_dados()
 
 # Garantir colunas obrigatórias e tipos corretos
 for col in ["ID / Código", "Tipo do Tecido", "Cor do Tecido", "Peças", "Metragem (m)"]:
-    if col injustice not in df_estoque.columns:
+    if col not in df_estoque.columns:
         df_estoque[col] = ""
 
 df_estoque["Peças"] = pd.to_numeric(df_estoque["Peças"], errors="coerce").fillna(0).astype(int)
@@ -109,7 +110,7 @@ if menu == "📊 Painel de Controle":
     pecas_totais = int(df_estoque["Peças"].sum())
     metragem_total = float(df_estoque["Metragem (m)"].sum())
     
-    # Alerta de estoque baixo (exemplo: menos de 20m ou 0 peças)
+    # Alerta de estoque baixo (menos de 20m ou 0 peças)
     itens_alerta = df_estoque[(df_estoque["Metragem (m)"] < 20) | (df_estoque["Peças"] == 0)].shape[0]
     
     c1, c2, c3 = st.columns([1, 1, 1])
@@ -144,7 +145,6 @@ if menu == "📊 Painel de Controle":
             m_grupo = df_grupo["Metragem (m)"].sum()
             
             with st.expander(f"📦 {tecido.upper()} — ({p_grupo} Peças | {m_grupo:.1f}m)"):
-                # Formata tabela para ficar limpa na tela pequena
                 st.dataframe(
                     df_grupo[["ID / Código", "Cor do Tecido", "Peças", "Metragem (m)"]], 
                     use_container_width=True, 
@@ -160,17 +160,14 @@ elif menu == "➕ Lançar Movimentação":
     if df_estoque.empty:
         st.warning("Cadastre um tecido primeiro.")
     else:
-        # Cria uma lista limpa para seleção
         df_estoque["label"] = df_estoque["Tipo do Tecido"] + " - " + df_estoque["Cor do Tecido"] + " (" + df_estoque["ID / Código"].astype(str) + ")"
         
         with st.form("form_movimentacao"):
             item_selecionado = st.selectbox("Escolha o Tecido:", df_estoque["label"].unique())
             tipo_mov = st.radio("Tipo de Operação:", ["SAÍDA (Venda/Uso)", "ENTRADA (Reposição)"])
             
-            # Colunas lado a lado no PC, empilhadas no celular automaticamente
             cx, cy = st.columns(2)
             with cx:
-                # O parâmetro step=1 força o celular a abrir o teclado numérico
                 qnt_pecas = st.number_input("Quantidade de Peças:", min_value=0, step=1, value=0)
             with cy:
                 qnt_metro = st.number_input("Metragem em Metros (m):", min_value=0.0, step=0.1, value=0.0)
@@ -182,7 +179,6 @@ elif menu == "➕ Lançar Movimentação":
                 if qnt_pecas == 0 and qnt_metro == 0.0:
                     st.error("Informe uma quantidade de peças ou metragem válida.")
                 else:
-                    # Encontra a linha correta na tabela original
                     linha_idx = df_estoque[df_estoque["label"] == item_selecionado].index[0]
                     id_codigo = df_estoque.loc[linha_idx, "ID / Código"]
                     tecido_nome = df_estoque.loc[linha_idx, "Tipo do Tecido"]
@@ -191,7 +187,6 @@ elif menu == "➕ Lançar Movimentação":
                     pecas_atuais = df_estoque.loc[linha_idx, "Peças"]
                     metro_atual = df_estoque.loc[linha_idx, "Metragem (m)"]
                     
-                    # Aplica a matemática baseada na operação
                     if "SAÍDA" in tipo_mov:
                         if qnt_pecas > pecas_atuais or qnt_metro > metro_atual:
                             st.warning("Atenção: A saída é maior do que a quantidade disponível em estoque!")
@@ -203,7 +198,6 @@ elif menu == "➕ Lançar Movimentação":
                         df_estoque.loc[linha_idx, "Metragem (m)"] = metro_atual + qnt_metro
                         fator_p, fator_m = qnt_pecas, qnt_metro
                     
-                    # Cria a linha do histórico de movimentações
                     nova_mov = pd.DataFrame([{
                         "Data/Hora": datetime.now().strftime("%d/%m/%Y %H:%M"),
                         "ID / Código": id_codigo,
@@ -218,11 +212,9 @@ elif menu == "➕ Lançar Movimentação":
                     
                     df_historico_novo = pd.concat([df_historico, nova_mov], ignore_index=True)
                     
-                    # Remove coluna auxiliar de marcação antes de salvar
                     if "label" in df_estoque.columns:
                         df_estoque.drop(columns=["label"], inplace=True)
                         
-                    # Atualiza o Google Sheets remoto
                     conn.update(worksheet=ABA_ESTOQUE, data=df_estoque)
                     conn.update(worksheet=ABA_HISTORICO, data=df_historico_novo)
                     
@@ -230,7 +222,7 @@ elif menu == "➕ Lançar Movimentação":
                     st.cache_data.clear()
                     st.rerun()
 
-# --- ABA 3: CADASTRAR NOVO ITEM NO ESTOQUE ---
+# --- ABA 3: CADASTRAR NOVO ITEM ---
 elif menu == "📝 Cadastrar Item":
     st.title("📝 Cadastrar Novo Tecido")
     
@@ -277,7 +269,6 @@ elif menu == "📜 Histórico Geral":
     st.markdown("Lista detalhada de quem realizou entradas ou saídas no estoque.")
     
     if not df_historico.empty:
-        # Inverte para ver os lançamentos mais novos no topo
         st.dataframe(df_historico.iloc[::-1], use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma movimentação registrada até o momento.")
