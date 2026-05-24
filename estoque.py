@@ -1,251 +1,283 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone, timedelta
-import gsheets  # Força o uso do nosso conector local para evitar o erro do Python 3.14
+from datetime import datetime
+import gsheets
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Estoque Inteligente - Tecidos", layout="wide", initial_sidebar_state="expanded")
+# Configuração da página - DEVE SER A PRIMEIRA LINHA DO STREAMLIT
+st.set_page_config(
+    page_title="Controle de Estoque - Tecidos",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="collapsed" # Melhora o visual no celular, deixando o menu escondido por padrão
+)
 
-# Limite para o alerta visual de reposição
-LIMITE_ALERTA = 2
-
-# Conexão Manual e Direta com o Google Sheets através do arquivo local
-conn = gsheets.GSheetsConnection(connection_name="gsheets")
-
-def obtener_horario_brasilia():
-    fuso_brasilia = timezone(timedelta(hours=-3))
-    return datetime.now(fuso_brasilia).strftime("%d/%m/%Y %H:%M:%S")
-
-# --- 2. CARREGAMENTO DE DADOS ---
-def carregar_estoque():
-    try:
-        df = conn.read(worksheet="Cadastro_Estoque", ttl=0)
-        df = df.dropna(subset=['ID'])
-        df['ID'] = df['ID'].astype(str).str.strip()
-        df['Nome do Tecido'] = df['Nome do Tecido'].fillna("").astype(str).str.strip()
-        df['Quantidade de Peças'] = pd.to_numeric(df['Quantidade de Peças'], errors='coerce').fillna(0).astype(int)
-        df['Metragem Total'] = pd.to_numeric(df['Metragem Total'], errors='coerce').fillna(0.0).astype(float)
+# 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
+def check_password():
+    """Retorna True se o usuário inseriu a senha correta."""
+    def password_entered():
+        user = st.session_state["username"].strip()
+        pwd = st.session_state["password"].strip()
         
-        if 'Cor' not in df.columns:
-            df['Cor'] = ""
-        df['Cor'] = df['Cor'].fillna("").astype(str).str.strip()
+        # Base de usuários cadastrados
+        usuarios_validos = {
+            "Vinicius": "011089",
+            "Breno": "ang2767",
+            "Batata": "batata"
+        }
         
-        return df[['ID', 'Nome do Tecido', 'Cor', 'Quantidade de Peças', 'Metragem Total']]
-    except Exception as e:
-        st.error(f"Erro ao carregar estoque: {e}")
-        return pd.DataFrame(columns=['ID', 'Nome do Tecido', 'Cor', 'Quantidade de Peças', 'Metragem Total'])
+        if user in usuarios_validos and usuarios_validos[user] == pwd:
+            st.session_state["password_correct"] = True
+            st.session_state["user_logado"] = user
+            del st.session_state["password"]  # Remove a senha da memória por segurança
+            del st.session_state["username"]
+        else:
+            st.session_state["password_correct"] = False
 
-def carregar_historico():
+    if "password_correct" not in st.session_state:
+        # Tela inicial de Login
+        st.markdown("<h2 style='text-align: center;'>🔒 Controle de Estoque</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: gray;'>Insira suas credenciais para acessar o sistema</p>", unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            with st.form("login_form"):
+                st.text_input("Usuário", key="username")
+                st.text_input("Senha", type="password", key="password")
+                st.form_submit_button("Entrar", on_click=password_entered)
+            
+            if "password_correct" in st.session_state Register and not st.session_state["password_correct"]:
+                st.error("❌ Usuário ou senha incorretos.")
+        return False
+    return True
+
+# Se não estiver logado, para a execução do código aqui
+if not check_password():
+    st.stop()
+
+# --- A PARTIR DAQUI O USUÁRIO ESTÁ LOGADO ---
+
+# Inicializa conexão com o Google Sheets
+try:
+    conn = gsheets.GSheetsConnection(connection_name="gsheets")
+except Exception as e:
+    st.error(f"Erro na conexão com o Google Sheets: {e}")
+    st.stop()
+
+# Nome das abas da planilha
+ABA_ESTOQUE = "Estoque"
+ABA_HISTORICO = "Historico"
+
+# Carrega os dados da Planilha
+@st.cache_data(ttl=0)
+def carregar_dados():
     try:
-        df = conn.read(worksheet="Historico_Movimentacao", ttl=0)
-        if df.empty:
-            return pd.DataFrame(columns=['Data/Hora', 'ID', 'Nome do Tecido', 'Cor', 'Tipo', 'Peças', 'Metragem', 'Motivo'])
-        df['ID'] = df['ID'].astype(str).str.strip()
-        if 'Cor' not in df.columns:
-            df['Cor'] = ""
-        df['Cor'] = df['Cor'].fillna("").astype(str).str.strip()
-        return df[['Data/Hora', 'ID', 'Nome do Tecido', 'Cor', 'Tipo', 'Peças', 'Metragem', 'Motivo']]
-    except Exception:
-        return pd.DataFrame(columns=['Data/Hora', 'ID', 'Nome do Tecido', 'Cor', 'Tipo', 'Peças', 'Metragem', 'Motivo'])
-
-if 'df_estoque' not in st.session_state:
-    st.session_state.df_estoque = carregar_estoque()
-
-if 'df_historico' not in st.session_state:
-    st.session_state.df_historico = carregar_historico()
-
-def salvar_dados(novo_estoque, novo_historico):
-    try:
-        conn.update(worksheet="Cadastro_Estoque", data=novo_estoque)
-        conn.update(worksheet="Historico_Movimentacao", data=novo_historico)
-        st.session_state.df_estoque = novo_estoque
-        st.session_state.df_historico = novo_historico
-        st.success("⚡ Estoque sincronizado instantaneamente!")
-        st.rerun()
+        df_est = conn.read(worksheet=ABA_ESTOQUE)
+        df_hist = conn.read(worksheet=ABA_HISTORICO)
+        return df_est, df_hist
     except Exception as e:
-        st.error(f"Erro ao salvar na nuvem: {e}")
+        st.error(f"Erro ao ler tabelas: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-# --- 3. MENU LATERAL ---
-menu = st.sidebar.radio("Navegação Direta", [
-    "📊 Painel de Controle", 
-    "🔄 Lançar Movimentação",
-    "➕ Cadastrar Item", 
-    "📜 Histórico Geral"
-])
+df_estoque, df_historico = carregar_dados()
 
-# --- TAB 1: PAINEL DE CONTROLE ---
+# Garantir colunas obrigatórias e tipos corretos
+for col in ["ID / Código", "Tipo do Tecido", "Cor do Tecido", "Peças", "Metragem (m)"]:
+    if col injustice not in df_estoque.columns:
+        df_estoque[col] = ""
+
+df_estoque["Peças"] = pd.to_numeric(df_estoque["Peças"], errors="coerce").fillna(0).astype(int)
+df_estoque["Metragem (m)"] = pd.to_numeric(df_estoque["Metragem (m)"], errors="coerce").fillna(0.0)
+
+# 2. INTERFACE E NAVEGAÇÃO COMPACTA (OTIMIZADA PARA CELULAR)
+st.sidebar.markdown(f"👤 **Logado como:** `{st.session_state['user_logado']}`")
+menu = st.sidebar.radio(
+    "Navegação Direta",
+    ["📊 Painel de Controle", "➕ Lançar Movimentação", "📝 Cadastrar Item", "📜 Histórico Geral"]
+)
+
+# Botão de Logout na barra lateral
+if st.sidebar.button("🚪 Sair do Sistema"):
+    del st.session_state["password_correct"]
+    del st.session_state["user_logado"]
+    st.rerun()
+
+# --- ABA 1: PAINEL DE CONTROLE ---
 if menu == "📊 Painel de Controle":
-    df_exibir = st.session_state.df_estoque.copy()
+    st.title("📊 Painel de Controle")
     
-    total_pecas = df_exibir['Quantidade de Peças'].sum()
-    total_metros = df_exibir['Metragem Total'].sum()
-    criticos = df_exibir[df_exibir['Quantidade de Peças'] <= LIMITE_ALERTA].shape[0] if not df_exibir.empty else 0
+    # Cards de resumo empilháveis/responsivos
+    pecas_totais = int(df_estoque["Peças"].sum())
+    metragem_total = float(df_estoque["Metragem (m)"].sum())
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Peças Totais em Loja", f"{total_pecas} un")
-    col2.metric("Metragem Global", f"{total_metros:.1f} m")
-    col3.metric("Avisos de Reposição", f"{criticos} itens", delta=-criticos if criticos > 0 else 0, delta_color="inverse")
+    # Alerta de estoque baixo (exemplo: menos de 20m ou 0 peças)
+    itens_alerta = df_estoque[(df_estoque["Metragem (m)"] < 20) | (df_estoque["Peças"] == 0)].shape[0]
     
-    st.divider()
+    c1, c2, c3 = st.columns([1, 1, 1])
+    c1.metric("Peças Totais em Loja", f"{pecas_totais} un")
+    c2.metric("Metragem Global", f"{metragem_total:.1f} m")
+    c3.metric("Avisos de Reposição", f"{itens_alerta} itens", delta="- Alerta" if itens_alerta > 0 else "OK")
     
-    c_busca, c_filtro = st.columns([3, 1])
-    busca = c_busca.text_input("⚡ Busca expressa (Digite qualquer termo, ID ou Cor):").strip().lower()
-    apenas_criticos = c_filtro.checkbox("⚠️ Ver apenas o que está acabando", value=False)
+    st.markdown("---")
     
-    if df_exibir.empty:
-        st.info("Nenhum tecido encontrado na base de dados.")
-    else:
-        if apenas_criticos:
-            df_exibir = df_exibir[df_exibir['Quantidade de Peças'] <= LIMITE_ALERTA]
-        if busca:
-            df_exibir = df_exibir[
-                df_exibir['Nome do Tecido'].str.lower().str.contains(busca) | 
-                df_exibir['Cor'].str.lower().str.contains(busca) |
-                df_exibir['ID'].str.lower().str.contains(busca)
-            ]
-            
-        tecidos_unicos = df_exibir['Nome do Tecido'].unique()
+    # Busca expressa simplificada para celular
+    busca = st.text_input("🔍 Busca rápida (Tecido, Cor ou ID):").strip().lower()
+    
+    ver_alerta = st.checkbox("⚠️ Ver apenas o que está acabando")
+    
+    df_filtrado = df_estoque.copy()
+    if busca:
+        df_filtrado = df_filtrado[
+            df_filtrado["Tipo do Tecido"].astype(str).str.lower().str.contains(busca) |
+            df_filtrado["Cor do Tecido"].astype(str).str.lower().str.contains(busca) |
+            df_filtrado["ID / Código"].astype(str).str.lower().str.contains(busca)
+        ]
         
-        if len(tecidos_unicos) == 0:
-            st.warning("Nenhum tecido corresponde aos filtros aplicados.")
-            
+    if ver_alerta:
+        df_filtrado = df_filtrado[(df_filtrado["Metragem (m)"] < 20) | (df_filtrado["Peças"] == 0)]
+        
+    # Exibição do Estoque por Grupos (Sanfonas facilitam no celular)
+    if not df_filtrado.empty:
+        tecidos_unicos = df_filtrado["Tipo do Tecido"].unique()
         for tecido in tecidos_unicos:
-            df_filtrado = df_exibir[df_exibir['Nome do Tecido'] == tecido]
-            sub_p = df_filtrado['Quantidade de Peças'].sum()
-            sub_m = df_filtrado['Metragem Total'].sum()
+            df_grupo = df_filtrado[df_filtrado["Tipo do Tecido"] == tecido]
+            p_grupo = df_grupo["Peças"].sum()
+            m_grupo = df_grupo["Metragem (m)"].sum()
             
-            titulo_aba = f"🧵 {tecido.upper()} ⸻ ({sub_p} Peças | {sub_m:.1f}m)"
-            
-            with st.expander(titulo_aba, expanded=True):
-                df_tabela = df_filtrado[['ID', 'Cor', 'Quantidade de Peças', 'Metragem Total']].copy()
-                df_tabela.columns = ['ID / Código', 'Cor do Tecido', 'Peças', 'Metragem (m)']
-                
-                def estilizar_linhas(row):
-                    return ['background-color: rgba(255, 75, 75, 0.15); color: #ff4b4b; font-weight: bold;'] * len(row) if row['Peças'] <= LIMITE_ALERTA else [''] * len(row)
-                
+            with st.expander(f"📦 {tecido.upper()} — ({p_grupo} Peças | {m_grupo:.1f}m)"):
+                # Formata tabela para ficar limpa na tela pequena
                 st.dataframe(
-                    df_tabela.style.apply(estilizar_linhas, axis=1),
+                    df_grupo[["ID / Código", "Cor do Tecido", "Peças", "Metragem (m)"]], 
                     use_container_width=True, 
                     hide_index=True
                 )
-
-# --- TAB 2: LANÇAR MOVIMENTAÇÃO ---
-elif menu == "🔄 Lançar Movimentação":
-    st.subheader("Registrar Entrada / Saída de Tecido")
-    
-    if st.session_state.df_estoque.empty:
-        st.info("Cadastre um item primeiro na aba 'Cadastrar Item'.")
     else:
-        lista_tecidos = sorted(list(st.session_state.df_estoque['Nome do Tecido'].unique()))
-        tecido_sel = st.selectbox("1. Escolha o Tecido:", lista_tecidos)
-        
-        df_cores_disp = st.session_state.df_estoque[st.session_state.df_estoque['Nome do Tecido'] == tecido_sel]
-        lista_cores = sorted(list(df_cores_disp['Cor'].unique()))
-        cor_sel = st.selectbox("2. Escolha a Cor:", lista_cores)
-        
-        idx = st.session_state.df_estoque[(st.session_state.df_estoque['Nome do Tecido'] == tecido_sel) & (st.session_state.df_estoque['Cor'] == cor_sel)].index[0]
-        dados_item = st.session_state.df_estoque.loc[idx]
-        
-        st.info(f"📊 Saldo Atual de **{tecido_sel} ({cor_sel})**: {dados_item['Quantidade de Peças']} peças | {dados_item['Metragem Total']} metros")
-        
-        with st.form("form_movimentacao_rapida"):
-            tipo_mov = st.radio("Operação:", ["ENTRADA", "SAÍDA"], horizontal=True)
-            
-            c1, c2 = st.columns(2)
-            pecas_mov = c1.number_input("Quantidade de Peças", min_value=0, value=0, step=1)
-            metro_mov = c2.number_input("Metragem (m)", min_value=0.0, value=0.0, step=0.1)
-            motivo_mov = st.text_input("Observação / Destino (Opcional)")
-            
-            enviar_mov = st.form_submit_button("Confirmar Lançamento", use_container_width=True)
-            
-            if enviar_mov:
-                if pecas_mov == 0 and metro_mov == 0:
-                    st.warning("Por favor, preencha valores válidos para Peças ou Metragem.")
-                else:
-                    df_est_copia = st.session_state.df_estoque.copy()
-                    qtd_atual = dados_item['Quantidade de Peças']
-                    metro_atual = dados_item['Metragem Total']
-                    
-                    valido = True
-                    if tipo_mov == "ENTRADA":
-                        novo_qtd = qtd_atual + pecas_mov
-                        novo_metro = metro_atual + metro_mov
-                    else:
-                        if pecas_mov > qtd_atual or metro_mov > metro_atual:
-                            st.error("Erro: Operação cancelada! Quantidade ou Metragem de SAÍDA é maior que o saldo em estoque.")
-                            valido = False
-                        else:
-                            novo_qtd = qtd_atual - pecas_mov
-                            novo_metro = metro_atual - metro_mov
-                    
-                    if valido:
-                        df_est_copia.at[idx, 'Quantidade de Peças'] = int(novo_qtd)
-                        df_est_copia.at[idx, 'Metragem Total'] = float(novo_metro)
-                        
-                        nova_mov = pd.DataFrame([{'Data/Hora': obtener_horario_brasilia(), 'ID': dados_item['ID'], 'Nome do Tecido': tecido_sel, 'Cor': cor_sel, 'Tipo': tipo_mov, 'Peças': int(pecas_mov), 'Metragem': float(metro_mov), 'Motivo': motivo_mov.strip() if motivo_mov.strip() else 'Movimentação rápida'}])
-                        df_hist_copia = pd.concat([nova_mov, st.session_state.df_historico], ignore_index=True)
-                        salvar_dados(df_est_copia, df_hist_copia)
+        st.info("Nenhum tecido encontrado para os filtros aplicados.")
 
-# --- TAB 3: CADASTRAR ITEM ---
-elif menu == "➕ Cadastrar Item":
-    st.subheader("Cadastrar Novo Tecido ou Adicionar Cor")
+# --- ABA 2: LANÇAR MOVIMENTAÇÃO (ENTRADAS E SAÍDAS) ---
+elif menu == "➕ Lançar Movimentação":
+    st.title("➕ Lançar Movimentação")
     
-    ids_existentes = sorted(list(st.session_state.df_estoque['ID'].unique()))
-    opcoes_id = ["[ + Criar Novo ID ]"] + ids_existentes
-    selecao_id = st.selectbox("Selecione um ID ou crie um do zero:", opcoes_id)
-    
-    with st.form("form_novo_cadastro"):
-        if selecao_id == "[ + Criar Novo ID ]":
-            novo_id = st.text_input("Código / ID Único:")
-            novo_nome = st.text_input("Nome do Tecido (Ex: Oxford):")
-        else:
-            novo_id = selecao_id
-            nome_descoberto = st.session_state.df_estoque[st.session_state.df_estoque['ID'] == novo_id]['Nome do Tecido'].iloc[0]
-            st.warning(f"Vinculando ao Tecido: {nome_descoberto} (ID: {novo_id})")
-            novo_nome = nome_descoberto
-            
-        nova_cor = st.text_input("Cor do Tecido:")
-        qtd_inicial = st.number_input("Estoque Inicial (Peças)", min_value=0, value=0, step=1)
-        metro_inicial = st.number_input("Estoque Inicial (Metragem)", min_value=0.0, value=0.0, step=0.1)
+    if df_estoque.empty:
+        st.warning("Cadastre um tecido primeiro.")
+    else:
+        # Cria uma lista limpa para seleção
+        df_estoque["label"] = df_estoque["Tipo do Tecido"] + " - " + df_estoque["Cor do Tecido"] + " (" + df_estoque["ID / Código"].astype(str) + ")"
         
-        salvar_item = st.form_submit_button("Concluir Cadastro", use_container_width=True)
-        
-        if salvar_item:
-            novo_id = novo_id.strip()
-            novo_nome = novo_nome.strip()
-            nova_cor = nova_cor.strip()
+        with st.form("form_movimentacao"):
+            item_selecionado = st.selectbox("Escolha o Tecido:", df_estoque["label"].unique())
+            tipo_mov = st.radio("Tipo de Operação:", ["SAÍDA (Venda/Uso)", "ENTRADA (Reposição)"])
             
-            if not novo_id or not novo_nome or not nova_cor:
-                st.error("Todos os campos de texto (ID, Nome e Cor) precisam ser preenchidos!")
-            else:
-                df_check = st.session_state.df_estoque
-                existe_duplicado = ((df_check['ID'] == novo_id) & (df_check['Cor'].fillna("").astype(str).str.lower() == nova_cor.lower())).any()
+            # Colunas lado a lado no PC, empilhadas no celular automaticamente
+            cx, cy = st.columns(2)
+            with cx:
+                # O parâmetro step=1 força o celular a abrir o teclado numérico
+                qnt_pecas = st.number_input("Quantidade de Peças:", min_value=0, step=1, value=0)
+            with cy:
+                qnt_metro = st.number_input("Metragem em Metros (m):", min_value=0.0, step=0.1, value=0.0)
                 
-                if existe_duplicado:
-                    st.error(f"Essa cor '{nova_cor}' já existe para o ID {novo_id}!")
+            obs = st.text_input("Observação / Destino:")
+            bt_Gravar = st.form_submit_button("Confirmar Lançamento")
+            
+            if bt_Gravar:
+                if qnt_pecas == 0 and qnt_metro == 0.0:
+                    st.error("Informe uma quantidade de peças ou metragem válida.")
                 else:
-                    nova_linha = pd.DataFrame([{'ID': novo_id, 'Nome do Tecido': novo_nome, 'Cor': nova_cor, 'Quantidade de Peças': int(qtd_inicial), 'Metragem Total': float(metro_inicial)}])
-                    df_atualizado = pd.concat([st.session_state.df_estoque, nova_linha], ignore_index=True)
+                    # Encontra a linha correta na tabela original
+                    linha_idx = df_estoque[df_estoque["label"] == item_selecionado].index[0]
+                    id_codigo = df_estoque.loc[linha_idx, "ID / Código"]
+                    tecido_nome = df_estoque.loc[linha_idx, "Tipo do Tecido"]
+                    cor_nome = df_estoque.loc[linha_idx, "Cor do Tecido"]
                     
-                    df_hist_atualizado = st.session_state.df_historico.copy()
-                    if qtd_inicial > 0 or metro_inicial > 0:
-                        nova_mov = pd.DataFrame([{'Data/Hora': obtener_horario_brasilia(), 'ID': novo_id, 'Nome do Tecido': novo_nome, 'Cor': nova_cor, 'Tipo': 'ENTRADA', 'Peças': int(qtd_inicial), 'Metragem': float(metro_inicial), 'Motivo': 'Saldo Inicial de Cadastro'}])
-                        df_hist_atualizado = pd.concat([nova_mov, df_hist_atualizado], ignore_index=True)
+                    pecas_atuais = df_estoque.loc[linha_idx, "Peças"]
+                    metro_atual = df_estoque.loc[linha_idx, "Metragem (m)"]
                     
-                    salvar_dados(df_atualizado, df_hist_atualizado)
+                    # Aplica a matemática baseada na operação
+                    if "SAÍDA" in tipo_mov:
+                        if qnt_pecas > pecas_atuais or qnt_metro > metro_atual:
+                            st.warning("Atenção: A saída é maior do que a quantidade disponível em estoque!")
+                        df_estoque.loc[linha_idx, "Peças"] = max(0, pecas_atuais - qnt_pecas)
+                        df_estoque.loc[linha_idx, "Metragem (m)"] = max(0.0, metro_atual - qnt_metro)
+                        fator_p, fator_m = -qnt_pecas, -qnt_metro
+                    else:
+                        df_estoque.loc[linha_idx, "Peças"] = pecas_atuais + qnt_pecas
+                        df_estoque.loc[linha_idx, "Metragem (m)"] = metro_atual + qnt_metro
+                        fator_p, fator_m = qnt_pecas, qnt_metro
+                    
+                    # Cria a linha do histórico de movimentações
+                    nova_mov = pd.DataFrame([{
+                        "Data/Hora": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        "ID / Código": id_codigo,
+                        "Tipo do Tecido": tecido_nome,
+                        "Cor do Tecido": cor_nome,
+                        "Tipo Movimentação": tipo_mov.split(" ")[0],
+                        "Peças Movimentadas": fator_p,
+                        "Metragem Movimentada (m)": fator_m,
+                        "Usuário": st.session_state["user_logado"],
+                        "Observação": obs
+                    }])
+                    
+                    df_historico_novo = pd.concat([df_historico, nova_mov], ignore_index=True)
+                    
+                    # Remove coluna auxiliar de marcação antes de salvar
+                    if "label" in df_estoque.columns:
+                        df_estoque.drop(columns=["label"], inplace=True)
+                        
+                    # Atualiza o Google Sheets remoto
+                    conn.update(worksheet=ABA_ESTOQUE, data=df_estoque)
+                    conn.update(worksheet=ABA_HISTORICO, data=df_historico_novo)
+                    
+                    st.success("Estoque sincronizado e atualizado com sucesso!")
+                    st.cache_data.clear()
+                    st.rerun()
 
-# --- TAB 4: HISTÓRICO GERAL ---
+# --- ABA 3: CADASTRAR NOVO ITEM NO ESTOQUE ---
+elif menu == "📝 Cadastrar Item":
+    st.title("📝 Cadastrar Novo Tecido")
+    
+    with st.form("form_cadastro"):
+        novo_id = st.text_input("ID / Código Único do Tecido:").strip()
+        novo_tipo = st.text_input("Nome/Tipo do Tecido (Ex: Suplex):").strip()
+        nova_cor = st.text_input("Cor do Tecido:").strip()
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            pecas_ini = st.number_input("Peças Iniciais:", min_value=0, step=1, value=0)
+        with c2:
+            metro_ini = st.number_input("Metragem Inicial (m):", min_value=0.0, step=0.1, value=0.0)
+            
+        bt_cadastrar = st.form_submit_button("Cadastrar no Sistema")
+        
+        if bt_cadastrar:
+            if not novo_id or not novo_tipo or not nova_cor:
+                st.error("Por favor, preencha todos os campos obrigatórios (ID, Tipo e Cor).")
+            elif novo_id in df_estoque["ID / Código"].astype(str).values:
+                st.error("Esse ID / Código já existe no seu estoque. Use outro identificador.")
+            else:
+                novo_item = pd.DataFrame([{
+                    "ID / Código": novo_id,
+                    "Tipo do Tecido": novo_tipo,
+                    "Cor do Tecido": nova_cor,
+                    "Peças": int(pecas_ini),
+                    "Metragem (m)": float(metro_ini)
+                }])
+                
+                df_estoque_novo = pd.concat([df_estoque, novo_item], ignore_index=True)
+                
+                if "label" in df_estoque_novo.columns:
+                    df_estoque_novo.drop(columns=["label"], inplace=True)
+                    
+                conn.update(worksheet=ABA_ESTOQUE, data=df_estoque_novo)
+                st.success(f"Tecido {novo_tipo} ({nova_cor}) adicionado com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
+
+# --- ABA 4: HISTÓRICO GERAL ---
 elif menu == "📜 Histórico Geral":
-    st.subheader("Auditoria de Movimentações Recentes")
-    if st.session_state.df_historico.empty:
-        st.info("Nenhuma movimentação registrada.")
+    st.title("📜 Histórico de Movimentações")
+    st.markdown("Lista detalhada de quem realizou entradas ou saídas no estoque.")
+    
+    if not df_historico.empty:
+        # Inverte para ver os lançamentos mais novos no topo
+        st.dataframe(df_historico.iloc[::-1], use_container_width=True, hide_index=True)
     else:
-        st.dataframe(st.session_state.df_historico, use_container_width=True, hide_index=True)
-
-# Sincronização manual
-with st.sidebar:
-    st.divider()
-    if st.button("🔄 Forçar Sincronização Google"):
-        st.session_state.df_estoque = carregar_estoque()
-        st.session_state.df_historico = carregar_historico()
-        st.rerun()
+        st.info("Nenhuma movimentação registrada até o momento.")
