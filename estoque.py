@@ -33,7 +33,7 @@ def check_password():
         else:
             st.session_state["password_correct"] = False
 
-    if "password_correct" not in st.session_state:
+    if "password_correct" not in st.session_state or not st.session_state["password_correct"]:
         # Tela inicial de Login
         st.markdown("<h2 style='text-align: center;'>🔒 Controle de Estoque</h2>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: gray;'>Insira suas credenciais para acessar o sistema</p>", unsafe_allow_html=True)
@@ -45,17 +45,16 @@ def check_password():
                 st.text_input("Senha", type="password", key="password")
                 st.form_submit_button("Entrar", on_click=password_entered)
             
-            # CORRIGIDO: Linha limpa sem a palavra intrusa
             if "password_correct" in st.session_state and not st.session_state["password_correct"]:
                 st.error("❌ Usuário ou senha incorretos.")
         return False
     return True
 
-# Se não estiver logado, para a execução do código aqui
+# Se não estiver logado, para a execução do código exatamente aqui e não lê mais nada abaixo
 if not check_password():
     st.stop()
 
-# --- A PARTIR DAQUI O USUÁRIO ESTÁ LOGADO ---
+# --- A PARTIR DAQUI O USUÁRIO ESTÁ LOGADO COM TOTAL SEGURANÇA ---
 
 # Inicializa conexão com o Google Sheets
 try:
@@ -90,7 +89,7 @@ df_estoque["Peças"] = pd.to_numeric(df_estoque["Peças"], errors="coerce").fill
 df_estoque["Metragem (m)"] = pd.to_numeric(df_estoque["Metragem (m)"], errors="coerce").fillna(0.0)
 
 # 2. INTERFACE E NAVEGAÇÃO COMPACTA (OTIMIZADA PARA CELULAR)
-st.sidebar.markdown(f"👤 **Logado como:** `{st.session_state['user_logado']}`")
+st.sidebar.markdown(f"👤 **Logado como:** `{st.session_state.get('user_logado', 'Usuário')}`")
 menu = st.sidebar.radio(
     "Navegação Direta",
     ["📊 Painel de Controle", "➕ Lançar Movimentação", "📝 Cadastrar Item", "📜 Histórico Geral"]
@@ -99,7 +98,8 @@ menu = st.sidebar.radio(
 # Botão de Logout na barra lateral
 if st.sidebar.button("🚪 Sair do Sistema"):
     del st.session_state["password_correct"]
-    del st.session_state["user_logado"]
+    if "user_logado" in st.session_state:
+        del st.session_state["user_logado"]
     st.rerun()
 
 # --- ABA 1: PAINEL DE CONTROLE ---
