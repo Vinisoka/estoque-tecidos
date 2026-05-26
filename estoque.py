@@ -240,8 +240,14 @@ elif menu == "📝 Cadastrar Item":
         if bt_cadastrar:
             if not novo_id or not novo_tipo or not nova_cor:
                 st.error("Por favor, preencha todos os campos obrigatórios (ID, Tipo e Cor).")
-            elif not df_estoque.empty and novo_id in df_estoque["ID / Código"].astype(str).values:
-                st.error("Esse ID / Código já existe no seu estoque. Use outro identificador.")
+            # Verifica se já existe a combinação de ID E Cor na planilha
+            duplicado = df_estoque[
+                (df_estoque["ID / Código"].astype(str).str.strip() == novo_id.strip()) & 
+                (df_estoque["Cor do Tecido"].astype(str).str.strip().str.lower() == nova_cor.strip().lower())
+            ]
+            
+            if not duplicado.empty:
+                st.error(f"Erro: O ID '{novo_id}' já está cadastrado com a cor '{nova_cor}'. Use outro ID ou outra cor.")
             else:
                 novo_item = pd.DataFrame([{
                     "ID / Código": novo_id,
