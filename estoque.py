@@ -217,57 +217,66 @@ elif menu == "➕ Lançar Movimentação":
                     st.cache_data.clear()
                     st.rerun()
 
-# --- ABA 3: CADASTRAR NOVO ITEM ---
+# --- ABA 3: CADASTRAR NOVO ITEM (COM ID AUTOMÁTICO POR COR) ---
 elif menu == "📝 Cadastrar Item":
-    st.title("📝 Cadastrar Novo Tecido")
+    st.title("📝 Cadastrar Novo Tecido por Cor")
+    st.markdown("Insira o tipo e a respectiva cor do rolo. O sistema gerará o ID único automaticamente.")
     
     with st.form("form_cadastro"):
-        novo_id = st.text_input("ID / Código Único do Tecido:").strip()
-        novo_tipo = st.text_input("Nome/Tipo do Tecido (Ex: Suplex):").strip()
-        nova_cor = st.text_input("Cor do Tecido:").strip()
+        novo_tipo = st.text_input("Nome/Tipo do Tecido (Ex: Oxford, Suplex):").strip()
+        nova_cor = st.text_input("Cor do Tecido (Ex: Vermelho, Azul Bic):").strip()
         
         c1, c2 = st.columns(2)
         with c1:
-            pecas_ini = st.number_input("Peças Iniciais:", min_value=0, step=1, value=0)
+            pecas_ini = st.number_input("Peças Iniciais (Rolos):", min_value=0, step=1, value=0)
         with c2:
-            metro_ini = st.number_input("Metragem Inicial (m):", min_value=0.0, step=0.1, value=0.0)
+            metro_ini = st.number_input("Metragem Inicial Total (m):", min_value=0.0, step=0.1, value=0.0)
             
-        bt_cadastrar = st.form_submit_button("Cadastrar no Sistema")
+        bt_cadastrar = st.form_submit_button("Cadastrar no Sistema", use_container_width=True)
         
         if bt_cadastrar:
-            if not novo_id or not novo_tipo or not nova_cor:
-                st.error("Por favor, preencha todos os campos obrigatórios (ID, Tipo e Cor).")
-            # Verifica se já existe a combinação de ID E Cor na planilha
-            duplicado = df_estoque[
-                (df_estoque["ID / Código"].astype(str).str.strip() == novo_id.strip()) & 
-                (df_estoque["Cor do Tecido"].astype(str).str.strip().str.lower() == nova_cor.strip().lower())
-            ]
-            
-            if not duplicado.empty:
-                st.error(f"Erro: O ID '{novo_id}' já está cadastrado com a cor '{nova_cor}'. Use outro ID ou outra cor.")
+            if not novo_tipo or not nova_cor:
+                st.error("Por favor, preencha o Tipo do Tecido e a Cor.")
             else:
-                novo_item = pd.DataFrame([{
-                    "ID / Código": novo_id,
-                    "Tipo do Tecido": novo_tipo,
-                    "Cor do Tecido": nova_cor,
-                    "Peças": int(pecas_ini),
-                    "Metragem (m)": float(metro_ini)
-                }])
+                # 1. Validação inteligente contra duplicados (evita cadastrar o mesmo tipo com a mesma cor)
+                duplicado = df_estoque[
+                    (df_estoque["Tipo do Tecido"].astype(str).str.strip().str.lower() == novo_tipo.lower()) & 
+                    (df_estoque["Cor do Tecido"].astype(str).str.strip().str.lower() == nova_cor.lower())
+                ]
                 
-                # Se a planilha estava vazia, cria um dataframe novo direto
-                if df_estoque.empty or df_estoque["ID / Código"].astype(str).str.strip().eq("").all():
-                    df_estoque_novo = novo_item
+                if not duplicado.empty:
+                    st.error(f"⚠️ O item '{novo_tipo} - {nova_cor}' já está cadastrado no sistema! Acesse 'Lançar Movimentação' para adicionar mais rolos/metragem a ele.")
                 else:
-                    df_estoque_novo = pd.concat([df_estoque, novo_item], ignore_index=True)
-                
-                if "label" in df_estoque_novo.columns:
-                    df_estoque_novo.drop(columns=["label"], inplace=True)
+                    # 2. Geração automática do próximo ID sequencial
+                    try:
+                        # Extrai os números de ID atuais limpando valores inválidos
+                        ids_numericos = pd.to_numeric(df_estoque["ID / Código"], errors="coerce").dropna()
+                        proximo_id = int(ids_numericos.max() + 1) if not ids_numericos.empty else 1
+                    except:
+                        proximo_id = len(df_estoque) + 1
                     
-                # Força salvar usando a variável global correta
-                conn.update(worksheet=ABA_ESTOQUE, data=df_estoque_novo)
-                st.success(f"Tecido {novo_tipo} ({nova_cor}) adicionado com sucesso!")
-                st.cache_data.clear()
-                st.rerun()
+                    novo_item = pd.DataFrame([{
+                        "ID / Código": proximo_id,
+                        "Tipo do Tecido": novo_tipo,
+                        "Cor do Tecido": nova_cor,
+                        "Peças": int(pecas_ini),
+                        "Metragem (m)": float(metro_ini)
+                    }])
+                    
+                    # Se a planilha estava vazia, cria um dataframe novo direto
+                    if df_estoque.empty or df_estoque["ID / Código"].astype(str).str.strip().eq("").all():
+                        df_estoque_novo = novo_item
+                    else:
+                        df_estoque_novo = pd.concat([df_estoque, novo_item], ignore_index=True)
+                    
+                    if "label" in df_estoque_novo.columns:
+                        df_estoque_novo.drop(columns=["label"], inplace=True)
+                        
+                    # Envia para o banco de dados
+                    conn.update(worksheet=ABA_ESTOQUE, data=df_estoque_novo)
+                    st.success(f"🎉 '{novo_tipo} - {nova_cor}' cadastrado com sucesso! ID Gerado: {proximo_id}")
+                    st.cache_data.clear()
+                    st.rerun()
 
 # --- ABA 4: HISTÓRICO GERAL ---
 elif menu == "📜 Histórico Geral":
