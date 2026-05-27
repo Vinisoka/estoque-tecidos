@@ -201,7 +201,7 @@ elif menu == "➕ Lançar Movimentação":
                         "Tipo Movimentação": tipo_mov.split(" ")[0],
                         "Peças Movimentadas": fator_p,
                         "Metragem Movimentada (m)": fator_m,
-                        "Usuário": st.session_state["user_logado"],
+                        "Usuário": st.session_state.get("user_logado", "Usuário"),
                         "Observação": obs
                     }])
                     
