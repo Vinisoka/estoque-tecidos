@@ -287,27 +287,23 @@ elif menu == "📜 Histórico Geral":
         st.dataframe(df_historico.iloc[::-1], use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma movimentação registrada até o momento.")
- # --- ABA 5: GERENCIAR ESTOQUE (EDITAR / EXCLUIR) ---
+# --- ABA 5: GERENCIAR ESTOQUE (CORRIGIDA) ---
 elif menu == "⚙️ Gerenciar Estoque":
     st.title("⚙️ Gerenciar Itens do Estoque")
     st.markdown("Use esta tela para corrigir nomes e cores ou remover itens do sistema diretamente na planilha.")
 
     if not df_estoque.empty:
-        # Cria uma combinação de Tipo + Cor para o usuário identificar o item exato
-        df_estoque["Identificador"] = df_estoque["Tipo do Tecido"] + " - " + df_estoque["Cor do Tecido"]
+        # Cria a combinação Tipo + Cor usando os nomes exatos das colunas da planilha
+        df_estoque["Identificador"] = df_estoque["Tipo do Tecido"].astype(str) + " - " + df_estoque["Cor do Tecido"].astype(str)
         
-        # Seleção do item que será alterado
         item_selecionado = st.selectbox(
             "🔍 Selecione o item que deseja gerenciar:", 
-            df_estoque["Identificador"].unique()
+            df_estoque["Identificador"].dropna().unique()
         )
         
-        # Puxa os dados atuais do item selecionado
         dados_tecido = df_estoque[df_estoque["Identificador"] == item_selecionado].iloc[0]
         
         st.divider()
-        
-        # Cria duas colunas na tela: uma para editar, outra para excluir
         col_editar, col_excluir = st.columns(2)
         
         with col_editar:
@@ -320,58 +316,42 @@ elif menu == "⚙️ Gerenciar Estoque":
                     st.error("O tipo e a cor não podem ficar em branco.")
                 else:
                     with st.spinner("Atualizando na planilha..."):
-                        # Localiza a linha combinando o Tipo antigo e a Cor antiga
-                        # Buscamos pelas colunas B (Tipo) e C (Cor) na planilha
-                        try:
-                            # Procura a linha onde o Tipo e a Cor batem perfeitamente
-                            todas_linhas = sheet_estoque.get_all_records()
-                            linha_index = None
-                            for i, linha_dados in enumerate(todas_linhas, start=2):
-                                if (str(linha_dados.get("Tipo do Tecido")) == str(dados_tecido["Tipo do Tecido"]) and 
-                                    str(linha_dados.get("Cor do Tecido")) == str(dados_tecido["Cor do Tecido"])):
-                                    linha_index = i
-                                    break
+                        # Localiza o índice correto no DataFrame e atualiza
+                        idx = df_estoque[df_estoque["Identificador"] == item_selecionado].index[0]
+                        df_estoque.loc[idx, "Tipo do Tecido"] = novo_tipo.strip()
+                        df_estoque.loc[idx, "Cor do Tecido"] = nova_cor.strip()
+                        
+                        df_salvar = df_estoque.copy()
+                        if "Identificador" in df_salvar.columns:
+                            df_salvar.drop(columns=["Identificador"], inplace=True)
+                        if "label" in df_salvar.columns:
+                            df_salvar.drop(columns=["label"], inplace=True)
                             
-                            if linha_index:
-                                # Atualiza o Tipo na Coluna B (2) e a Cor na Coluna C (3)
-                                sheet_estoque.update_cell(linha_index, 2, novo_tipo.strip())
-                                sheet_estoque.update_cell(linha_index, 3, nova_cor.strip())
-                                
-                                st.success(f"🎉 '{item_selecionado}' atualizado com sucesso!")
-                                st.cache_data.clear() # Limpa o cache para recarregar a planilha
-                                st.rerun()
-                            else:
-                                st.error("Erro ao localizar a linha exata deste item na planilha.")
-                        except Exception as e:
-                            st.error(f"Erro na conexão com a planilha: {e}")
+                        # Salva utilizando a conexão padrão do seu sistema
+                        conn.update(worksheet=ABA_ESTOQUE, data=df_salvar)
+                        st.success(f"🎉 Alterações salvas com sucesso!")
+                        st.cache_data.clear()
+                        st.rerun()
 
         with col_excluir:
             st.subheader("🚨 Excluir Item")
             st.warning("Atenção: A exclusão removerá este rolo/cor permanentemente do saldo.")
             
-            # Caixa de confirmação para evitar cliques por acidente
             confirmar = st.checkbox(f"Confirmo que desejo excluir permanentemente o item {item_selecionado}")
             
             if st.button("🗑️ Excluir Item", type="primary", use_container_width=True, disabled=not confirmar):
                 with st.spinner("Removendo da planilha..."):
-                    try:
-                        todas_linhas = sheet_estoque.get_all_records()
-                        linha_index = None
-                        for i, linha_dados in enumerate(todas_linhas, start=2):
-                            if (str(linha_dados.get("Tipo do Tecido")) == str(dados_tecido["Tipo do Tecido"]) and 
-                                str(linha_dados.get("Cor do Tecido")) == str(dados_tecido["Cor do Tecido"])):
-                                linha_index = i
-                                break
+                    # Filtra o DataFrame removendo o item selecionado
+                    df_estoque_novo = df_estoque[df_estoque["Identificador"] != item_selecionado].copy()
+                    
+                    if "Identificador" in df_estoque_novo.columns:
+                        df_estoque_novo.drop(columns=["Identificador"], inplace=True)
+                    if "label" in df_estoque_novo.columns:
+                        df_estoque_novo.drop(columns=["label"], inplace=True)
                         
-                        if linha_index:
-                            sheet_estoque.delete_rows(linha_index) # Deleta a linha inteira na planilha
-                            
-                            st.success(f"🗑️ '{item_selecionado}' foi removido do estoque.")
-                            st.cache_data.clear() # Limpa o cache para atualizar as telas
-                            st.rerun()
-                        else:
-                            st.error("Erro ao localizar o item para exclusão.")
-                    except Exception as e:
-                        st.error(f"Erro ao deletar na planilha: {e}")
+                    conn.update(worksheet=ABA_ESTOQUE, data=df_estoque_novo)
+                    st.success(f"🗑️ '{item_selecionado}' foi removido do estoque.")
+                    st.cache_data.clear()
+                    st.rerun()
     else:
         st.info("Nenhum tecido encontrado para gerenciar.")
