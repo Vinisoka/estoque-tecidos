@@ -16,22 +16,18 @@ ABA_ESTOQUE = "Estoque"
 ABA_HISTORICO = "Historico"
 
 # 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
+# 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
 def check_password():
     """Retorna True se o usuário inseriu a senha correta."""
     def password_entered():
         user = st.session_state["username"].strip()
         pwd = st.session_state["password"].strip()
         
-        # Base de usuários cadastrados
-        usuarios_validos = {
-            "Vinicius": "011089",
-            "Breno": "ang2767",
-            "Batata": "batata"
-        }
+        # Puxa os usuários e senhas do arquivo de segredos
+        usuarios_validos = st.secrets["passwords"]
         
         if user in usuarios_validos and usuarios_validos[user] == pwd:
             st.session_state["password_correct"] = True
-            st.session_state["user_logado"] = user
             del st.session_state["password"]  # Remove a senha da memória por segurança
             del st.session_state["username"]
         else:
