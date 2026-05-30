@@ -14,8 +14,8 @@ st.set_page_config(
 # Constantes globais com o nome exato das abas na planilha
 ABA_ESTOQUE = "Estoque"
 ABA_HISTORICO = "Historico"
+ABA_LINHAS = "Linhas"   
 
-# 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
 # 1. SISTEMA DE AUTENTICAÇÃO (LOGIN)
 def check_password():
     """Retorna True se o usuário inseriu a senha correta."""
@@ -64,19 +64,25 @@ except Exception as e:
     st.stop()
 
 # Carrega os dados da Planilha
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=5)
 def carregar_dados():
     try:
         df_est = conn.read(worksheet=ABA_ESTOQUE)
         df_hist = conn.read(worksheet=ABA_HISTORICO)
-        return df_est, df_hist
+        
+        # Lê a aba de linhas também de forma global
+        dados_lin = conn.read(worksheet=ABA_LINHAS)
+        df_lin = pd.DataFrame(dados_lin)
+        
+        return pd.DataFrame(df_est), pd.DataFrame(df_hist), df_lin
     except Exception as e:
-        st.error(f"Erro ao ler tabelas: {e}. Verifique se os nomes das abas na planilha estão corretos (Estoque e Historico).")
-        return pd.DataFrame(), pd.DataFrame()
+        st.error(f"Erro ao ler tabelas: {e}. Verifique se os nomes das abas na planilha estão corretos.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-df_estoque, df_historico = carregar_dados()
+# Recebe as 3 tabelas atualizadas do Sheets
+df_estoque, df_historico, df_linhas = carregar_dados()
 
-# Garantir colunas obrigatórias e tipos corretos
+# Garantir colunas obrigatórias e tipos corretos para tecidos
 for col in ["ID / Código", "Tipo do Tecido", "Cor do Tecido", "Peças", "Metragem (m)"]:
     if df_estoque.empty or col not in df_estoque.columns:
         df_estoque[col] = ""
@@ -85,10 +91,10 @@ df_estoque["Peças"] = pd.to_numeric(df_estoque["Peças"], errors="coerce").fill
 df_estoque["Metragem (m)"] = pd.to_numeric(df_estoque["Metragem (m)"], errors="coerce").fillna(0.0)
 
 # 2. INTERFACE E NAVEGAÇÃO COMPACTA (OTIMIZADA PARA CELULAR)
-st.sidebar.markdown(f"👤 **Logado como:** `{st.session_state.get('user_logado', 'Usuário')}`")
+st.sidebar.markdown(f"👤 **Logado como:** `Painel`")
 menu = st.sidebar.radio(
     "Navegação Direta",
-    ["📊 Painel de Controle", "➕ Lançar Movimentação", "📝 Cadastrar Item", "📜 Histórico Geral", "⚙️ Gerenciar Estoque"]
+    ["📊 Painel de Controle", "🧵 Estoque de Linhas", "➕ Lançar Movimentação", "📝 Cadastrar Item", "📋 Histórico Geral", "⚙️ Gerenciar Estoque"]
 )
 
 # Botão de Logout na barra lateral
@@ -98,8 +104,128 @@ if st.sidebar.button("🚪 Sair do Sistema"):
         del st.session_state["user_logado"]
     st.rerun()
 
-# --- ABA 1: PAINEL DE CONTROLE ---
-if menu == "📊 Painel de Controle":
+
+# --- ABA: ESTOQUE DE LINHAS ---
+if menu == "🧵 Estoque de Linhas":
+    st.title("🧵 Controle de Estoque - Linhas")
+    
+    # Valida e limpa os dados da memória para exibição do Saldo (Trata linhas fantasmas da planilha)
+    if df_linhas is None or df_linhas.empty:
+        df_linhas_exibir = pd.DataFrame(columns=["Cor/Código", "Marca", "Quantidade de Cones"])
+    else:
+        df_linhas_exibir = df_linhas.dropna(subset=["Cor/Código"]).copy()
+        df_linhas_exibir = df_linhas_exibir[df_linhas_exibir["Cor/Código"].astype(str).str.strip() != ""]
+
+    # Abas internas organizadas para economizar espaço em telas mobile
+    tab_saldo, tab_cadastro, tab_movimentacao = st.tabs(["📋 Saldo Atual", "📝 Cadastrar Linha", "🔄 Lançar Cones"])
+
+    # 1. TABELA DE SALDO
+    with tab_saldo:
+        st.subheader("Saldo Atual de Cones")
+        if df_linhas_exibir.empty:
+            st.info("Nenhuma linha cadastrada ainda.")
+        else:
+            st.dataframe(df_linhas_exibir, use_container_width=True, hide_index=True)
+
+    # 2. FORMULÁRIO DE CADASTRO
+    with tab_cadastro:
+        st.subheader("Cadastrar Nova Linha/Cor")
+        with st.form("form_cadastro_linha", clear_on_submit=True):
+            cor_codigo = st.text_input("Cor / Código da Linha (ex: Preto - Ricamare 2024)")
+            marca_linha = st.text_input("Marca (ex: Ricamare, Setta)")
+            cones_iniciais = st.number_input("Quantidade de Cones Inicial", min_value=0, step=1, value=0)
+            
+            btn_salvar_linha = st.form_submit_button("Salvar Linha", use_container_width=True)
+            
+            if btn_salvar_linha:
+                texto_cor = str(cor_codigo).strip()
+                texto_marca = str(marca_linha).strip()
+    
+                if not texto_cor or not texto_marca:
+                    st.error("Por favor, preencha todos os campos obrigatórios (Cor/Código e Marca)!")
+                else:
+                    nova_linha_df = pd.DataFrame([{
+                        "Cor/Código": texto_cor,
+                        "Marca": texto_marca,
+                        "Quantidade de Cones": int(cones_iniciais)
+                    }])
+        
+                    # Lê em tempo real direto da nuvem (ttl=0 evita sobreposição de dados)
+                    try:
+                        dados_reais_sheets = conn.read(worksheet=ABA_LINHAS, ttl=0)
+                        df_linhas_atualizado = pd.DataFrame(dados_reais_sheets)
+                    except:
+                        df_linhas_atualizado = pd.DataFrame(columns=["Cor/Código", "Marca", "Quantidade de Cones"])
+        
+                    if not df_linhas_atualizado.empty:
+                        df_linhas_atualizado = df_linhas_atualizado.dropna(subset=["Cor/Código"])
+                        df_linhas_atualizado = df_linhas_atualizado[df_linhas_atualizado["Cor/Código"].astype(str).str.strip() != ""]
+            
+                    if df_linhas_atualizado.empty:
+                        df_linhas_novas = nova_linha_df
+                    else:
+                        df_linhas_novas = pd.concat([df_linhas_atualizado, nova_linha_df], ignore_index=True)
+            
+                    try:
+                        conn.update(worksheet=ABA_LINHAS, data=df_linhas_novas)
+                        st.success(f"🧵 Linha '{texto_cor}' cadastrada com sucesso!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as f:
+                        st.error(f"Erro ao salvar na planilha: {f}")
+
+    # 3. FORMULÁRIO DE MOVIMENTAÇÃO (ENTRADA/SAÍDA DE CONES)
+    with tab_movimentacao:
+        st.subheader("Registrar Entrada ou Saída de Cones")
+        if df_linhas_exibir.empty:
+            st.info("Cadastre pelo menos uma linha antes de lançar movimentações.")
+        else:
+            with st.form("form_movimentacao_linha", clear_on_submit=True):
+                lista_opcoes = df_linhas_exibir.apply(lambda r: f"{r['Cor/Código']} ({r['Marca']})", axis=1).tolist()
+                linha_selecionada = st.selectbox("Selecione a Linha/Cor", options=lista_opcoes)
+                
+                tipo_mov = st.radio("Tipo de Movimentação", ["📥 Entrada (+)", "📤 Saída (-)"], horizontal=True)
+                qtd_mov = st.number_input("Quantidade de Cones", min_value=1, step=1, value=1)
+                
+                btn_mov_linha = st.form_submit_button("Confirmar Movimentação de Linhas", use_container_width=True)
+                
+                if btn_mov_linha:
+                    idx_selecionado = lista_opcoes.index(linha_selecionada)
+                    cor_original = df_linhas_exibir.iloc[idx_selecionado]["Cor/Código"]
+                    marca_original = df_linhas_exibir.iloc[idx_selecionado]["Marca"]
+                    
+                    try:
+                        df_linhas_reais = pd.DataFrame(conn.read(worksheet=ABA_LINHAS, ttl=0))
+                    except:
+                        df_linhas_reais = df_linhas_exibir.copy()
+                    
+                    filtro = (df_linhas_reais["Cor/Código"].astype(str).str.strip() == str(cor_original).strip()) & \
+                             (df_linhas_reais["Marca"].astype(str).str.strip() == str(marca_original).strip())
+                    
+                    if not df_linhas_reais[filtro].empty:
+                        idx_planilha = df_linhas_reais[filtro].index[0]
+                        qtd_atual = int(df_linhas_reais.at[idx_planilha, "Quantidade de Cones"])
+                        
+                        if "Entrada" in tipo_mov:
+                            novo_saldo = qtd_atual + int(qtd_mov)
+                        else:
+                            novo_saldo = max(0, qtd_atual - int(qtd_mov))
+                        
+                        df_linhas_reais.at[idx_planilha, "Quantidade de Cones"] = novo_saldo
+                        
+                        try:
+                            conn.update(worksheet=ABA_LINHAS, data=df_linhas_reais)
+                            st.success(f"🔄 Estoque atualizado! Novo saldo de '{cor_original}': {novo_saldo} cones.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar planilha: {e}")
+                    else:
+                        st.error("Erro ao localizar o item na planilha. Atualize a página.")
+
+
+# --- ABA: PAINEL DE CONTROLE ---
+elif menu == "📊 Painel de Controle":
     st.title("📊 Painel de Controle")
     
     if df_estoque.empty:
@@ -116,17 +242,14 @@ if menu == "📊 Painel de Controle":
         
         st.markdown("---")
         
-       # 2. Filtros e Tabela Interativa Global
     st.subheader("📦 Saldo Atual do Estoque")
     st.markdown("Use a tabela abaixo para pesquisar, ordenar ou filtrar os rolos disponíveis.")
     
-    # Seus filtros originais mantidos e integrados
     busca = st.text_input("🔍 Busca rápida (Tecido, Cor ou ID):", "").strip().lower()
     ver_alerta = st.checkbox("⚠️ Ver apenas o que está acabando")
     
     df_filtrado = df_estoque.copy()
     
-    # Aplica a busca por Tipo, Cor ou ID
     if busca:
         df_filtrado = df_filtrado[
             df_filtrado["Tipo do Tecido"].astype(str).str.lower().str.contains(busca) | 
@@ -134,11 +257,9 @@ if menu == "📊 Painel de Controle":
             df_filtrado["ID / Código"].astype(str).str.lower().str.contains(busca)
         ]
         
-    # Aplica o filtro de alerta
     if ver_alerta:
         df_filtrado = df_filtrado[(df_filtrado["Metragem (m)"] < 20) | (df_filtrado["Peças"] == 0)]
         
-    # Exibe os dados de forma rica e interativa
     if not df_filtrado.empty:
         st.dataframe(
             df_filtrado[["ID / Código", "Tipo do Tecido", "Cor do Tecido", "Peças", "Metragem (m)"]],
@@ -148,7 +269,8 @@ if menu == "📊 Painel de Controle":
     else:
         st.info("Nenhum tecido encontrado para os filtros aplicados.")
 
-# --- ABA 2: LANÇAR MOVIMENTAÇÃO (ENTRADAS E SAÍDAS) ---
+
+# --- ABA: LANÇAR MOVIMENTAÇÃO (TECIDOS) ---
 elif menu == "➕ Lançar Movimentação":
     st.title("➕ Lançar Movimentação")
     
@@ -201,7 +323,7 @@ elif menu == "➕ Lançar Movimentação":
                         "Tipo Movimentação": tipo_mov.split(" ")[0],
                         "Peças Movimentadas": fator_p,
                         "Metragem Movimentada (m)": fator_m,
-                        "Usuário": st.session_state.get("user_logado", "Usuário"),
+                        "Usuário": "Painel",
                         "Observação": obs
                     }])
                     
@@ -213,11 +335,12 @@ elif menu == "➕ Lançar Movimentação":
                     conn.update(worksheet=ABA_ESTOQUE, data=df_estoque)
                     conn.update(worksheet=ABA_HISTORICO, data=df_historico_novo)
                     
-                    st.success("Estoque sincronizado e atualizado com sucesso!")
+                    st.success("Estoque sincronizado e updated com sucesso!")
                     st.cache_data.clear()
                     st.rerun()
 
-# --- ABA 3: CADASTRAR NOVO ITEM (COM ID AUTOMÁTICO POR COR) ---
+
+# --- ABA: CADASTRAR NOVO ITEM (TECIDOS) ---
 elif menu == "📝 Cadastrar Item":
     st.title("📝 Cadastrar Novo Tecido por Cor")
     st.markdown("Insira o tipo e a respectiva cor do rolo. O sistema gerará o ID único automaticamente.")
@@ -238,18 +361,15 @@ elif menu == "📝 Cadastrar Item":
             if not novo_tipo or not nova_cor:
                 st.error("Por favor, preencha o Tipo do Tecido e a Cor.")
             else:
-                # 1. Validação inteligente contra duplicados (evita cadastrar o mesmo tipo com a mesma cor)
                 duplicado = df_estoque[
                     (df_estoque["Tipo do Tecido"].astype(str).str.strip().str.lower() == novo_tipo.lower()) & 
                     (df_estoque["Cor do Tecido"].astype(str).str.strip().str.lower() == nova_cor.lower())
                 ]
                 
                 if not duplicado.empty:
-                    st.error(f"⚠️ O item '{novo_tipo} - {nova_cor}' já está cadastrado no sistema! Acesse 'Lançar Movimentação' para adicionar mais rolos/metragem a ele.")
+                    st.error(f"⚠️ O item '{novo_tipo} - {nova_cor}' já está cadastrado no sistema!")
                 else:
-                    # 2. Geração automática do próximo ID sequencial
                     try:
-                        # Extrai os números de ID atuais limpando valores inválidos
                         ids_numericos = pd.to_numeric(df_estoque["ID / Código"], errors="coerce").dropna()
                         proximo_id = int(ids_numericos.max() + 1) if not ids_numericos.empty else 1
                     except:
@@ -263,7 +383,6 @@ elif menu == "📝 Cadastrar Item":
                         "Metragem (m)": float(metro_ini)
                     }])
                     
-                    # Se a planilha estava vazia, cria um dataframe novo direto
                     if df_estoque.empty or df_estoque["ID / Código"].astype(str).str.strip().eq("").all():
                         df_estoque_novo = novo_item
                     else:
@@ -272,14 +391,14 @@ elif menu == "📝 Cadastrar Item":
                     if "label" in df_estoque_novo.columns:
                         df_estoque_novo.drop(columns=["label"], inplace=True)
                         
-                    # Envia para o banco de dados
                     conn.update(worksheet=ABA_ESTOQUE, data=df_estoque_novo)
                     st.success(f"🎉 '{novo_tipo} - {nova_cor}' cadastrado com sucesso! ID Gerado: {proximo_id}")
                     st.cache_data.clear()
                     st.rerun()
 
-# --- ABA 4: HISTÓRICO GERAL ---
-elif menu == "📜 Histórico Geral":
+
+# --- ABA: HISTÓRICO GERAL ---
+elif menu == "📋 Histórico Geral":
     st.title("📜 Histórico de Movimentações")
     st.markdown("Lista detalhada de quem realizou entradas ou saídas no estoque.")
     
@@ -287,13 +406,14 @@ elif menu == "📜 Histórico Geral":
         st.dataframe(df_historico.iloc[::-1], use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma movimentação registrada até o momento.")
-# --- ABA 5: GERENCIAR ESTOQUE (CORRIGIDA) ---
+
+
+# --- ABA: GERENCIAR ESTOQUE ---
 elif menu == "⚙️ Gerenciar Estoque":
     st.title("⚙️ Gerenciar Itens do Estoque")
     st.markdown("Use esta tela para corrigir nomes e cores ou remover itens do sistema diretamente na planilha.")
 
     if not df_estoque.empty:
-        # Cria a combinação Tipo + Cor usando os nomes exatos das colunas da planilha
         df_estoque["Identificador"] = df_estoque["Tipo do Tecido"].astype(str) + " - " + df_estoque["Cor do Tecido"].astype(str)
         
         item_selecionado = st.selectbox(
@@ -316,7 +436,6 @@ elif menu == "⚙️ Gerenciar Estoque":
                     st.error("O tipo e a cor não podem ficar em branco.")
                 else:
                     with st.spinner("Atualizando na planilha..."):
-                        # Localiza o índice correto no DataFrame e atualiza
                         idx = df_estoque[df_estoque["Identificador"] == item_selecionado].index[0]
                         df_estoque.loc[idx, "Tipo do Tecido"] = novo_tipo.strip()
                         df_estoque.loc[idx, "Cor do Tecido"] = nova_cor.strip()
@@ -327,7 +446,6 @@ elif menu == "⚙️ Gerenciar Estoque":
                         if "label" in df_salvar.columns:
                             df_salvar.drop(columns=["label"], inplace=True)
                             
-                        # Salva utilizando a conexão padrão do seu sistema
                         conn.update(worksheet=ABA_ESTOQUE, data=df_salvar)
                         st.success(f"🎉 Alterações salvas com sucesso!")
                         st.cache_data.clear()
@@ -341,7 +459,6 @@ elif menu == "⚙️ Gerenciar Estoque":
             
             if st.button("🗑️ Excluir Item", type="primary", use_container_width=True, disabled=not confirmar):
                 with st.spinner("Removendo da planilha..."):
-                    # Filtra o DataFrame removendo o item selecionado
                     df_estoque_novo = df_estoque[df_estoque["Identificador"] != item_selecionado].copy()
                     
                     if "Identificador" in df_estoque_novo.columns:
